@@ -86,6 +86,22 @@ username = "{{.RegistryMirrorUsername}}"
 password = "{{.RegistryMirrorPassword}}"
 {{- end -}}
 `
+	registryMirrorHostsTomlTemplate = `{{ define "registryMirrorHostsTomlSettings" -}}
+[settings.configuration-files.registry-mirror-hosts-toml]
+path = "/etc/containerd/certs.d/public.ecr.aws/hosts.toml"
+template-type = "plain"
+mode = "0644"
+data = """
+server = "https://public.ecr.aws"
+
+[host."https://{{.RegistryMirrorEndpoint}}"]
+capabilities = ["pull", "resolve"]
+
+[host."https://{{.RegistryMirrorEndpoint}}".header]
+authorization = "Basic {{.RegistryMirrorCredentialEncoded}}"
+"""
+{{- end -}}
+`
 	ntpTemplate = `{{ define "ntpSettings" -}}
 [settings.ntp]
 time-servers = [{{stringsJoin .NTPServers ", " }}]
@@ -138,6 +154,10 @@ trusted = true
 {{template "registryMirrorCredentialsSettings" .}}
 {{- end -}}
 
+{{- if (ne .RegistryMirrorCredentialEncoded "")}}
+{{template "registryMirrorHostsTomlSettings" .}}
+{{- end -}}
+
 {{- if .NTPServers}}
 {{template "ntpSettings" .}}
 {{- end -}}
@@ -163,9 +183,10 @@ type bottlerocketSettingsInput struct {
 	RegistryMirrorEndpoint       string
 	RegistryMirrorCredentialHost string
 	RegistryMirrorCACert         string
-	RegistryMirrorUsername       string
-	RegistryMirrorPassword       string
-	Hostname                     string
+	RegistryMirrorUsername          string
+	RegistryMirrorPassword          string
+	RegistryMirrorCredentialEncoded string
+	Hostname                        string
 	HostContainers               []etcdbootstrapv1.BottlerocketHostContainer
 	BootstrapContainers          []etcdbootstrapv1.BottlerocketBootstrapContainer
 	NTPServers                   []string
@@ -234,6 +255,10 @@ func generateBottlerocketNodeUserData(kubeadmBootstrapContainerUserData []byte, 
 		}
 		bottlerocketInput.RegistryMirrorUsername = registryMirrorCredentials.Username
 		bottlerocketInput.RegistryMirrorPassword = registryMirrorCredentials.Password
+		if registryMirrorCredentials.Username != "" && registryMirrorCredentials.Password != "" {
+			bottlerocketInput.RegistryMirrorCredentialEncoded = base64.StdEncoding.EncodeToString(
+				[]byte(fmt.Sprintf("%s:%s", registryMirrorCredentials.Username, registryMirrorCredentials.Password)))
+		}
 	}
 
 	if config.NTP != nil && config.NTP.Enabled != nil && *config.NTP.Enabled {
@@ -365,6 +390,9 @@ func generateNodeUserData(kind string, tpl string, data interface{}) ([]byte, er
 	}
 	if _, err := tm.Parse(registryMirrorCredentialsTemplate); err != nil {
 		return nil, errors.Wrapf(err, "failed to parse registry mirror credentials %s template", kind)
+	}
+	if _, err := tm.Parse(registryMirrorHostsTomlTemplate); err != nil {
+		return nil, errors.Wrapf(err, "failed to parse registry mirror hosts.toml %s template", kind)
 	}
 	if _, err := tm.Parse(ntpTemplate); err != nil {
 		return nil, errors.Wrapf(err, "failed to parse NTP %s template", kind)
